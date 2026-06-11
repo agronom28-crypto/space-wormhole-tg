@@ -4,14 +4,12 @@ import asyncio
 from dotenv import load_dotenv
 load_dotenv()
 
-from telegram import Bot, Update
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler
-from django.conf import settings
-
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'config.settings')
 import django
 django.setup()
 
+from telegram import Update
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler
 from django.conf import settings as cfg
 
 
@@ -37,13 +35,16 @@ async def button(update: Update, context):
     await query.answer(url=url)
 
 
-def main():
+async def run():
     app = Application.builder().token(cfg.BOT_TOKEN).build()
     app.add_handler(CommandHandler(['start', 'game'], start))
     app.add_handler(CallbackQueryHandler(button))
     print('Bot polling started...')
-    app.run_polling()
+    async with app:
+        await app.start()
+        await app.updater.start_polling()
+        await asyncio.Event().wait()  # держим до Ctrl+C
 
 
 if __name__ == '__main__':
-    main()
+    asyncio.run(run())
