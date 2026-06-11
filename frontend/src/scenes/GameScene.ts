@@ -5,10 +5,10 @@ import { submitScore } from '../api/scoreApi'
 
 const COMET_RADIUS = 10
 const WORMHOLE_RADIUS = 30
-const MAX_DRAG = 120       // max pixels drag distance
-const MAX_SPEED = 14       // max launch speed
-const PREDICT_STEPS = 80   // dots in trajectory preview
-const PREDICT_DT = 2.5     // simulation step for preview
+const MAX_DRAG = 120
+const MAX_SPEED = 14
+const PREDICT_STEPS = 80
+const PREDICT_DT = 2.5
 
 export class GameScene extends Phaser.Scene {
   private comet!: Phaser.GameObjects.Arc
@@ -17,9 +17,7 @@ export class GameScene extends Phaser.Scene {
   private wormhole!: Phaser.GameObjects.Arc
   private wormholeGlow!: Phaser.GameObjects.Arc
   private aimGraphics!: Phaser.GameObjects.Graphics
-  private trailGraphics!: Phaser.GameObjects.Graphics
 
-  // Slingshot state
   private isDragging = false
   private dragStartX = 0
   private dragStartY = 0
@@ -34,12 +32,22 @@ export class GameScene extends Phaser.Scene {
   private uiScene?: any
   private shots = 0
   private maxShots = 3
+  private gameOverShown = false
 
   constructor() { super({ key: 'GameScene' }) }
 
   create() {
-    this.scene.launch('UIScene')
+    this.level = 1
+    this.score = 0
+    this.sessionStart = Date.now()
+    this.gameOverShown = false
+
+    // Launch UIScene on top
+    if (!this.scene.isActive('UIScene')) {
+      this.scene.launch('UIScene')
+    }
     this.uiScene = this.scene.get('UIScene') as any
+
     this._loadLevel(this.level)
   }
 
@@ -49,6 +57,7 @@ export class GameScene extends Phaser.Scene {
     this.cometTrail = []
     this.isFlying = false
     this.isDragging = false
+    this.gameOverShown = false
     this.shots = 0
     this.maxShots = Math.max(1, 4 - Math.floor(lvl / 3))
 
@@ -62,22 +71,17 @@ export class GameScene extends Phaser.Scene {
       const x = Phaser.Math.Between(0, width)
       const y = Phaser.Math.Between(0, height)
       const r = Math.random() > 0.85 ? 2 : 1
-      const a = 0.3 + Math.random() * 0.7
-      this.add.circle(x, y, r, 0xffffff, a)
+      this.add.circle(x, y, r, 0xffffff, 0.3 + Math.random() * 0.7)
     }
 
-    // Aim + trail graphics (always on top)
-    this.trailGraphics = this.add.graphics()
     this.aimGraphics = this.add.graphics()
 
     // Planets
     for (const p of this.levelData.planets) {
       const color = p.gravity > 0 ? 0x3377ff : 0xff3333
-      // Gravity field ring
       this.add.circle(p.x, p.y, p.radius * 2.5, color, 0.06)
       this.add.circle(p.x, p.y, p.radius * 1.5, color, 0.12)
       const obj = this.add.circle(p.x, p.y, p.radius, color, 0.9)
-      // Highlight
       this.add.circle(p.x - p.radius * 0.3, p.y - p.radius * 0.3, p.radius * 0.35, 0xffffff, 0.25)
       this.planets.push({ obj, gravity: p.gravity, x: p.x, y: p.y, radius: p.radius })
     }
@@ -90,59 +94,52 @@ export class GameScene extends Phaser.Scene {
     this.wormhole = this.add.circle(wp.x, wp.y, WORMHOLE_RADIUS - 10, 0x001a15, 1)
     this.add.circle(wp.x, wp.y, 6, 0x00ffcc, 0.9)
 
-    // Shots indicator
-    this.add.text(width / 2, height - 28, `Shots: ${this.maxShots}`, {
-      fontSize: '15px', color: '#aaffee'
-    }).setOrigin(0.5).setName('shotsText')
+    // Shots
+    this.add.text(width / 2, height - 28,
+      `Shots left: ${this.maxShots}`,
+      { fontSize: '15px', color: '#aaffee' }
+    ).setOrigin(0.5).setName('shotsText')
 
     // Comet
     const sp = this.levelData.start
     this.comet = this.add.circle(sp.x, sp.y, COMET_RADIUS, 0xffee00, 1)
-    // Glow ring
-    this.add.circle(sp.x, sp.y, COMET_RADIUS + 7, 0xffcc00, 0.2).setName('cometGlow')
+    this.add.circle(sp.x, sp.y, COMET_RADIUS + 7, 0xffcc00, 0.2)
 
-    // Hint on level 1
+    // Hint level 1
     if (lvl === 1) {
-      const hint = this.add.text(sp.x, sp.y - 40,
-        'Drag back & release!', {
-          fontSize: '15px', color: '#ffffff',
-          backgroundColor: '#00000088',
-          padding: { x: 8, y: 4 }
-        }).setOrigin(0.5)
-      this.time.delayedCall(3000, () => hint.destroy())
+      const hint = this.add.text(sp.x, sp.y - 42,
+        '← Drag & release!',
+        { fontSize: '15px', color: '#ffffff', backgroundColor: '#00000099', padding: { x: 8, y: 4 } }
+      ).setOrigin(0.5)
+      this.time.delayedCall(3500, () => hint?.destroy())
     }
 
-    this._setupInput()
     this.uiScene?.updateScore(this.score, this.level)
+    this._setupInput()
   }
 
   private _setupInput() {
-    // Pointerdown: start drag only near comet
     this.input.on('pointerdown', (ptr: Phaser.Input.Pointer) => {
-      if (this.isFlying) return
+      if (this.isFlying || this.gameOverShown) return
       this.isDragging = true
       this.dragStartX = ptr.x
       this.dragStartY = ptr.y
     })
 
-    // Pointermove: show slingshot rubber band + trajectory
     this.input.on('pointermove', (ptr: Phaser.Input.Pointer) => {
       if (!this.isDragging || this.isFlying) return
       this._drawAim(ptr.x, ptr.y)
     })
 
-    // Pointerup: launch!
     this.input.on('pointerup', (ptr: Phaser.Input.Pointer) => {
-      if (!this.isDragging || this.isFlying) return
+      if (!this.isDragging || this.isFlying || this.gameOverShown) return
       this.isDragging = false
       this.aimGraphics.clear()
 
-      // Drag vector: from pointer back to comet start = slingshot
       const dx = this.dragStartX - ptr.x
       const dy = this.dragStartY - ptr.y
       const dist = Math.sqrt(dx * dx + dy * dy)
-
-      if (dist < 8) return  // too small drag = ignore
+      if (dist < 8) return
 
       const clamped = Math.min(dist, MAX_DRAG)
       const speed = (clamped / MAX_DRAG) * MAX_SPEED
@@ -155,109 +152,91 @@ export class GameScene extends Phaser.Scene {
 
   private _drawAim(ptrX: number, ptrY: number) {
     this.aimGraphics.clear()
-
     const dx = this.dragStartX - ptrX
     const dy = this.dragStartY - ptrY
-    const dist = Math.min(Math.sqrt(dx * dx + dy * dy), MAX_DRAG)
-    if (dist < 4) return
+    const rawDist = Math.sqrt(dx * dx + dy * dy)
+    if (rawDist < 4) return
 
-    const clamped = Math.min(Math.sqrt(dx * dx + dy * dy), MAX_DRAG)
+    const clamped = Math.min(rawDist, MAX_DRAG)
     const speed = (clamped / MAX_DRAG) * MAX_SPEED
-    const nx = dx / Math.sqrt(dx * dx + dy * dy)
-    const ny = dy / Math.sqrt(dx * dx + dy * dy)
-    const vx0 = nx * speed
-    const vy0 = ny * speed
+    const nx = dx / rawDist, ny = dy / rawDist
+    const vx0 = nx * speed, vy0 = ny * speed
 
-    // Rubber band lines (two strings)
+    // Rubber band
     this.aimGraphics.lineStyle(2, 0xffcc00, 0.7)
     this.aimGraphics.beginPath()
-    this.aimGraphics.moveTo(ptrX - 6, ptrY - 6)
+    this.aimGraphics.moveTo(ptrX - 5, ptrY - 5)
     this.aimGraphics.lineTo(this.comet.x, this.comet.y)
-    this.aimGraphics.lineTo(ptrX + 6, ptrY + 6)
+    this.aimGraphics.lineTo(ptrX + 5, ptrY + 5)
     this.aimGraphics.strokePath()
 
-    // Power indicator circle at drag point
+    // Power dot
     const power = clamped / MAX_DRAG
     const col = power > 0.7 ? 0xff4444 : power > 0.4 ? 0xffaa00 : 0x44ff88
     this.aimGraphics.fillStyle(col, 0.9)
     this.aimGraphics.fillCircle(ptrX, ptrY, 8)
 
-    // Trajectory prediction dots
+    // Trajectory dots
     let px = this.comet.x, py = this.comet.y
     let pvx = vx0, pvy = vy0
     for (let i = 0; i < PREDICT_STEPS; i++) {
-      // gravity
       for (const planet of this.planets) {
-        const ddx = planet.x - px
-        const ddy = planet.y - py
+        const ddx = planet.x - px, ddy = planet.y - py
         const d2 = ddx * ddx + ddy * ddy + 100
-        const force = (planet.gravity * 400) / d2
-        pvx += ddx * force * PREDICT_DT
-        pvy += ddy * force * PREDICT_DT
+        pvx += ddx * (planet.gravity * 400 / d2) * PREDICT_DT
+        pvy += ddy * (planet.gravity * 400 / d2) * PREDICT_DT
       }
       const spd = Math.sqrt(pvx * pvx + pvy * pvy)
       if (spd > MAX_SPEED * 1.5) { pvx = pvx / spd * MAX_SPEED * 1.5; pvy = pvy / spd * MAX_SPEED * 1.5 }
       px += pvx * PREDICT_DT
       py += pvy * PREDICT_DT
 
-      // Fade out dots
       const alpha = 0.7 * (1 - i / PREDICT_STEPS)
-      const dotR = i % 3 === 0 ? 3 : 2
       this.aimGraphics.fillStyle(0xffffff, alpha)
-      this.aimGraphics.fillCircle(px, py, dotR)
+      this.aimGraphics.fillCircle(px, py, i % 3 === 0 ? 3 : 1.5)
 
-      // Stop prediction if hit wormhole
       const wdx = px - this.wormhole.x, wdy = py - this.wormhole.y
       if (Math.sqrt(wdx * wdx + wdy * wdy) < WORMHOLE_RADIUS) {
-        this.aimGraphics.fillStyle(0x00ffcc, 0.9)
-        this.aimGraphics.fillCircle(px, py, 8)
+        this.aimGraphics.fillStyle(0x00ffcc, 1)
+        this.aimGraphics.fillCircle(px, py, 10)
         break
       }
     }
   }
 
-  update(_time: number, delta: number) {
-    // Wormhole pulse
+  update(time: number, delta: number) {
     if (this.wormholeGlow) {
-      const pulse = 0.3 + 0.15 * Math.sin(_time / 400)
-      this.wormholeGlow.setAlpha(pulse)
+      this.wormholeGlow.setAlpha(0.3 + 0.15 * Math.sin(time / 400))
     }
 
     if (!this.isFlying) return
     const dt = delta / 16.67
 
-    // Gravity
     for (const planet of this.planets) {
       const dx = planet.x - this.comet.x
       const dy = planet.y - this.comet.y
-      const d2 = dx * dx + dy * dy + 100
-      const force = (planet.gravity * 400) / d2
+      const d2 = dx * dx + dy * dy
+      const force = (planet.gravity * 400) / (d2 + 100)
       this.vx += dx * force * dt
       this.vy += dy * force * dt
 
-      // Crash into planet
-      if (Math.sqrt(d2 - 100) < planet.radius + COMET_RADIUS) {
-        this._onLevelFail()
-        return
+      if (Math.sqrt(d2) < planet.radius + COMET_RADIUS) {
+        this._onLevelFail(); return
       }
     }
 
-    // Speed clamp
-    const speed = Math.sqrt(this.vx * this.vx + this.vy * this.vy)
-    if (speed > MAX_SPEED * 1.5) { this.vx = this.vx / speed * MAX_SPEED * 1.5; this.vy = this.vy / speed * MAX_SPEED * 1.5 }
+    const spd = Math.sqrt(this.vx * this.vx + this.vy * this.vy)
+    if (spd > MAX_SPEED * 1.5) { this.vx = this.vx / spd * MAX_SPEED * 1.5; this.vy = this.vy / spd * MAX_SPEED * 1.5 }
 
     this.comet.x += this.vx * dt
     this.comet.y += this.vy * dt
-
-    // Comet trail
-    this._addTrailDot()
+    this._addTrail()
 
     // Wormhole hit
     const wdx = this.comet.x - this.wormhole.x
     const wdy = this.comet.y - this.wormhole.y
     if (Math.sqrt(wdx * wdx + wdy * wdy) < WORMHOLE_RADIUS + COMET_RADIUS) {
-      this._onLevelComplete()
-      return
+      this._onLevelComplete(); return
     }
 
     // Out of bounds
@@ -265,44 +244,38 @@ export class GameScene extends Phaser.Scene {
     if (this.comet.x < -60 || this.comet.x > width + 60 ||
         this.comet.y < -60 || this.comet.y > height + 60) {
       if (this.shots < this.maxShots) {
-        // Respawn comet for next shot
         this.isFlying = false
         this.comet.setPosition(this.levelData.start.x, this.levelData.start.y)
-        this.trailGraphics.clear()
+        this.cometTrail.forEach(d => d.destroy())
+        this.cometTrail = []
       } else {
         this._onLevelFail()
       }
     }
   }
 
-  private _addTrailDot() {
+  private _addTrail() {
     const dot = this.add.circle(this.comet.x, this.comet.y, 3, 0xffcc44, 0.6)
     this.cometTrail.push(dot)
-    // Fade old dots
     for (let i = 0; i < this.cometTrail.length; i++) {
-      const a = (i / this.cometTrail.length) * 0.6
-      this.cometTrail[i].setAlpha(a)
+      this.cometTrail[i].setAlpha((i / this.cometTrail.length) * 0.55)
     }
-    if (this.cometTrail.length > 30) {
-      this.cometTrail.shift()?.destroy()
-    }
+    if (this.cometTrail.length > 30) this.cometTrail.shift()?.destroy()
   }
 
   private _onLevelComplete() {
     this.isFlying = false
-    // Bonus for fewer shots
-    const bonus = Math.max(0, (this.maxShots - this.shots + 1)) * 300
-    const levelScore = 500 + bonus
-    this.score += levelScore
+    const bonus = Math.max(0, this.maxShots - this.shots + 1) * 300
+    this.score += 500 + bonus
     this.level++
-    this.uiScene?.updateScore(this.score, this.level)
-
     this.cameras.main.flash(400, 0, 255, 180)
     this.cameras.main.shake(200, 0.01)
     this.time.delayedCall(700, () => this._loadLevel(this.level))
   }
 
   private _onLevelFail() {
+    if (this.gameOverShown) return
+    this.gameOverShown = true
     this.isFlying = false
     this.isDragging = false
     this.input.removeAllListeners()
@@ -311,14 +284,14 @@ export class GameScene extends Phaser.Scene {
 
   private async _showGameOver() {
     const { width, height } = this.scale
-    this.add.rectangle(width / 2, height / 2, 340, 240, 0x000011, 0.92)
-    this.add.text(width / 2, height / 2 - 80, 'GAME OVER', {
+    this.add.rectangle(width / 2, height / 2, 340, 260, 0x000011, 0.93)
+    this.add.text(width / 2, height / 2 - 90, 'GAME OVER', {
       fontSize: '36px', color: '#ff4444', fontStyle: 'bold'
     }).setOrigin(0.5)
-    this.add.text(width / 2, height / 2 - 25, `Score: ${this.score}`, {
-      fontSize: '28px', color: '#ffffff'
+    this.add.text(width / 2, height / 2 - 35, `Score: ${this.score}`, {
+      fontSize: '30px', color: '#ffffff'
     }).setOrigin(0.5)
-    this.add.text(width / 2, height / 2 + 15, `Level: ${this.level}`, {
+    this.add.text(width / 2, height / 2 + 10, `Level: ${this.level}`, {
       fontSize: '20px', color: '#aaaacc'
     }).setOrigin(0.5)
 
@@ -328,18 +301,27 @@ export class GameScene extends Phaser.Scene {
       session_seconds: Math.floor((Date.now() - this.sessionStart) / 1000),
     })
 
-    const restart = this.add.text(width / 2, height / 2 + 75, '🔄  Play Again', {
+    const restart = this.add.text(width / 2, height / 2 + 70, '🔄  Play Again', {
       fontSize: '24px', color: '#00ffcc',
       backgroundColor: '#001133',
       padding: { x: 20, y: 10 }
     }).setOrigin(0.5).setInteractive({ useHandCursor: true })
+
+    const menu = this.add.text(width / 2, height / 2 + 118, '← Menu', {
+      fontSize: '18px', color: '#667788'
+    }).setOrigin(0.5).setInteractive({ useHandCursor: true })
+
     restart.on('pointerdown', () => {
-      this.score = 0
-      this.level = 1
-      this.sessionStart = Date.now()
-      this._loadLevel(this.level)
+      this.scene.stop('UIScene')
+      this.scene.restart()
     })
     restart.on('pointerover', () => restart.setColor('#ffffff'))
     restart.on('pointerout', () => restart.setColor('#00ffcc'))
+
+    menu.on('pointerdown', () => {
+      this.scene.stop('UIScene')
+      this.scene.stop('GameScene')
+      this.scene.start('MenuScene')
+    })
   }
 }
