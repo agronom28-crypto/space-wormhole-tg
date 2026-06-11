@@ -1,9 +1,7 @@
 import Phaser from 'phaser'
 import { GameScene } from './scenes/GameScene'
 import { MenuScene } from './scenes/MenuScene'
-import { UIScene } from './scenes/UIScene'
 
-// Parse Telegram context from URL
 export const TG_CONTEXT = (() => {
   const p = new URLSearchParams(window.location.search)
   return {
@@ -24,11 +22,7 @@ const config: Phaser.Types.Core.GameConfig = {
     mode: Phaser.Scale.FIT,
     autoCenter: Phaser.Scale.CENTER_BOTH,
   },
-  physics: {
-    default: 'arcade',
-    arcade: { gravity: { x: 0, y: 0 }, debug: false },
-  },
-  scene: [MenuScene, GameScene, UIScene],
+  scene: [MenuScene, GameScene],
 }
 
 new Phaser.Game(config)
