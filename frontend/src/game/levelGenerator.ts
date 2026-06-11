@@ -22,68 +22,52 @@ function makeRng(seed: number) {
 }
 
 export function generateLevel(level: number): LevelData {
-  const GLOBAL_SEED = 0xDEAD_BEEF
-  const rng = makeRng(GLOBAL_SEED + level * 1337)
+  const rng = makeRng(0xDEAD_BEEF + level * 1337)
 
   const W = 480, H = 800
   const margin = 70
 
-  // Fixed layouts — start and wormhole always in opposite corners
   const layouts = [
-    { start: { x: 70,       y: H - 70  }, wormhole: { x: W - 70,  y: 70       } },
-    { start: { x: W - 70,  y: H - 70  }, wormhole: { x: 70,       y: 70       } },
-    { start: { x: 70,       y: H - 70  }, wormhole: { x: W - 70,  y: H / 2    } },
-    { start: { x: W / 2,   y: H - 70  }, wormhole: { x: W / 2,   y: 70       } },
-    { start: { x: 70,       y: H / 2   }, wormhole: { x: W - 70,  y: 70       } },
+    { start: { x: 70,      y: H - 70  }, wormhole: { x: W - 70, y: 70      } },
+    { start: { x: W - 70, y: H - 70  }, wormhole: { x: 70,      y: 70      } },
+    { start: { x: 70,      y: H - 70  }, wormhole: { x: W - 70, y: H / 2   } },
+    { start: { x: W / 2,  y: H - 70  }, wormhole: { x: W / 2,  y: 70      } },
+    { start: { x: 70,      y: H / 2   }, wormhole: { x: W - 70, y: 70      } },
   ]
   const layout = layouts[Math.floor(rng() * layouts.length)]
 
-  // Safe zone: planets must be this far from start AND wormhole
-  // Early levels = bigger safe zone so player can aim freely
-  const safeStart    = level <= 2 ? 180 : level <= 5 ? 140 : 110
-  const safeWormhole = level <= 2 ? 120 : level <= 5 ? 100 : 80
+  const safeStart    = level <= 2 ? 200 : level <= 5 ? 160 : 120
+  const safeWormhole = level <= 2 ? 130 : level <= 5 ? 110 : 90
+  const numPlanets   = level === 1 ? 1 : Math.min(1 + Math.floor((level - 1) / 2), 6)
+  const minRadius    = level <= 2 ? 14 : level <= 5 ? 16 : 18
+  const maxRadius    = level <= 2 ? 20 : level <= 5 ? 26 : 32
 
-  // Planet count: start with 1, ramp up slowly
-  const numPlanets = level === 1 ? 1 : Math.min(1 + Math.floor((level - 1) / 2), 7)
-
-  // Planet size: small on early levels
-  const minRadius = level <= 2 ? 14 : level <= 5 ? 16 : 18
-  const maxRadius = level <= 2 ? 22 : level <= 5 ? 28 : 36
-
-  // Gravity strength: gentle early
-  const gravBase = level <= 2 ? 0.25 : level <= 5 ? 0.35 : 0.45
-  const gravRange = level <= 2 ? 0.2  : level <= 5 ? 0.35 : 0.55
+  // GRAVITY: very weak, just enough to bend trajectory slightly
+  // level 1-2: 0.04-0.08,  level 3-5: 0.06-0.14,  level 6+: 0.10-0.22
+  const gravBase  = level <= 2 ? 0.04 : level <= 5 ? 0.06 : 0.10
+  const gravRange = level <= 2 ? 0.04 : level <= 5 ? 0.08 : 0.12
 
   const planets: PlanetDef[] = []
 
   for (let i = 0; i < numPlanets; i++) {
     let x = 0, y = 0
     let placed = false
-
     for (let tries = 0; tries < 60; tries++) {
       x = margin + rng() * (W - margin * 2)
       y = margin + rng() * (H - margin * 2)
-
-      const farFromStart    = dist(x, y, layout.start.x,    layout.start.y)    > safeStart
-      const farFromWormhole = dist(x, y, layout.wormhole.x, layout.wormhole.y) > safeWormhole
-      const farFromOthers   = planets.every(p => dist(x, y, p.x, p.y) > 90)
-
-      if (farFromStart && farFromWormhole && farFromOthers) {
-        placed = true
-        break
-      }
+      if (
+        dist(x, y, layout.start.x,    layout.start.y)    > safeStart &&
+        dist(x, y, layout.wormhole.x, layout.wormhole.y) > safeWormhole &&
+        planets.every(p => dist(x, y, p.x, p.y) > 100)
+      ) { placed = true; break }
     }
-
-    if (!placed) continue  // skip if can't place safely
+    if (!placed) continue
 
     const radius = minRadius + rng() * (maxRadius - minRadius)
-
-    // No repelling planets on level 1-2, rare on 3-4
-    const canRepel = level >= 5
-    const gravitySign = canRepel && rng() > 0.75 ? -1 : 1
-    const gravityMag = (gravBase + rng() * gravRange) * (1 + level * 0.03)
-
-    planets.push({ x, y, radius, gravity: gravitySign * gravityMag })
+    const canRepel = level >= 6
+    const sign = canRepel && rng() > 0.75 ? -1 : 1
+    const mag  = gravBase + rng() * gravRange
+    planets.push({ x, y, radius, gravity: sign * mag })
   }
 
   return { ...layout, planets }

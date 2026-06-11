@@ -5,10 +5,11 @@ import { submitScore } from '../api/scoreApi'
 
 const COMET_RADIUS = 10
 const WORMHOLE_RADIUS = 30
-const MAX_DRAG = 160      // bigger drag zone = easier to aim
-const MAX_SPEED = 12
-const PREDICT_STEPS = 90
-const PREDICT_DT = 2.2
+const MAX_DRAG   = 160
+const MAX_SPEED  = 16    // faster comet = gravity feels weaker relative to speed
+const GRAV_MULT  = 80    // was 400 — reduced 5x
+const PREDICT_STEPS = 100
+const PREDICT_DT    = 2.0
 
 export class GameScene extends Phaser.Scene {
   private comet!: Phaser.GameObjects.Arc
@@ -59,7 +60,6 @@ export class GameScene extends Phaser.Scene {
     this.levelData = generateLevel(lvl)
     const { width, height } = this.scale
 
-    // Starfield
     for (let i = 0; i < 100; i++) {
       this.add.circle(
         Phaser.Math.Between(0, width),
@@ -71,7 +71,6 @@ export class GameScene extends Phaser.Scene {
 
     this.aimGraphics = this.add.graphics()
 
-    // Planets
     for (const p of this.levelData.planets) {
       const color = p.gravity > 0 ? 0x3377ff : 0xff3333
       this.add.circle(p.x, p.y, p.radius * 2.5, color, 0.05)
@@ -81,7 +80,6 @@ export class GameScene extends Phaser.Scene {
       this.planets.push({ gravity: p.gravity, x: p.x, y: p.y, radius: p.radius })
     }
 
-    // Wormhole
     const wp = this.levelData.wormhole
     this.add.circle(wp.x, wp.y, WORMHOLE_RADIUS * 2.2, 0x00ffcc, 0.07)
     this.add.circle(wp.x, wp.y, WORMHOLE_RADIUS * 1.5, 0x00ffcc, 0.14)
@@ -89,12 +87,10 @@ export class GameScene extends Phaser.Scene {
     this.wormhole = this.add.circle(wp.x, wp.y, WORMHOLE_RADIUS - 10, 0x001a15, 1)
     this.add.circle(wp.x, wp.y, 6, 0x00ffcc, 1)
 
-    // Comet
     const sp = this.levelData.start
     this.comet = this.add.circle(sp.x, sp.y, COMET_RADIUS, 0xffee00, 1)
     this.add.circle(sp.x, sp.y, COMET_RADIUS + 7, 0xffcc00, 0.2)
 
-    // HUD
     this.scoreText = this.add.text(16, 16, `SCORE: ${this.score}`, {
       fontSize: '18px', color: '#ffffff'
     }).setDepth(10)
@@ -102,11 +98,10 @@ export class GameScene extends Phaser.Scene {
       fontSize: '15px', color: '#aaccee'
     }).setDepth(10)
 
-    // Hint
     if (lvl === 1) {
       const hint = this.add.text(sp.x, sp.y - 44,
         'Drag toward target & release',
-        { fontSize: '15px', color: '#fff', backgroundColor: '#00000099', padding: { x: 8, y: 4 } }
+        { fontSize: '14px', color: '#fff', backgroundColor: '#00000099', padding: { x: 8, y: 4 } }
       ).setOrigin(0.5).setDepth(10)
       this.time.delayedCall(4000, () => hint?.destroy())
     }
@@ -132,7 +127,6 @@ export class GameScene extends Phaser.Scene {
       this.isDragging = false
       this.aimGraphics.clear()
 
-      // JOYSTICK: drag toward target = fly that direction
       const dx = ptr.x - this.dragStartX
       const dy = ptr.y - this.dragStartY
       const dist = Math.sqrt(dx * dx + dy * dy)
@@ -150,8 +144,6 @@ export class GameScene extends Phaser.Scene {
 
   private _drawAim(ptrX: number, ptrY: number) {
     this.aimGraphics.clear()
-
-    // Direction: FROM dragStart TO pointer = launch direction
     const dx = ptrX - this.dragStartX
     const dy = ptrY - this.dragStartY
     const rawDist = Math.sqrt(dx * dx + dy * dy)
@@ -163,34 +155,28 @@ export class GameScene extends Phaser.Scene {
     let pvx = nx * speed, pvy = ny * speed
     let px = this.comet.x, py = this.comet.y
 
-    // Arrow line from comet in launch direction
     const power = clamped / MAX_DRAG
     const col = power > 0.7 ? 0xff4444 : power > 0.4 ? 0xffaa00 : 0x44ff88
 
     this.aimGraphics.lineStyle(3, col, 0.8)
     this.aimGraphics.beginPath()
     this.aimGraphics.moveTo(this.comet.x, this.comet.y)
-    this.aimGraphics.lineTo(
-      this.comet.x + nx * clamped * 0.5,
-      this.comet.y + ny * clamped * 0.5
-    )
+    this.aimGraphics.lineTo(this.comet.x + nx * clamped * 0.5, this.comet.y + ny * clamped * 0.5)
     this.aimGraphics.strokePath()
 
-    // Power dot at pointer
     this.aimGraphics.fillStyle(col, 0.9)
     this.aimGraphics.fillCircle(ptrX, ptrY, 10)
 
-    // Power ring around comet
-    this.aimGraphics.lineStyle(2, col, 0.5)
+    this.aimGraphics.lineStyle(2, col, 0.4)
     this.aimGraphics.strokeCircle(this.comet.x, this.comet.y, 16 + power * 12)
 
-    // Trajectory dots
+    // Trajectory
     for (let i = 0; i < PREDICT_STEPS; i++) {
       for (const planet of this.planets) {
         const ddx = planet.x - px, ddy = planet.y - py
         const d2 = ddx * ddx + ddy * ddy + 100
-        pvx += ddx * (planet.gravity * 400 / d2) * PREDICT_DT
-        pvy += ddy * (planet.gravity * 400 / d2) * PREDICT_DT
+        pvx += ddx * (planet.gravity * GRAV_MULT / d2) * PREDICT_DT
+        pvy += ddy * (planet.gravity * GRAV_MULT / d2) * PREDICT_DT
       }
       const spd = Math.sqrt(pvx * pvx + pvy * pvy)
       if (spd > MAX_SPEED * 1.5) { pvx = pvx / spd * MAX_SPEED * 1.5; pvy = pvy / spd * MAX_SPEED * 1.5 }
@@ -221,8 +207,8 @@ export class GameScene extends Phaser.Scene {
       const dx = planet.x - this.comet.x
       const dy = planet.y - this.comet.y
       const d2 = dx * dx + dy * dy
-      this.vx += dx * (planet.gravity * 400 / (d2 + 100)) * dt
-      this.vy += dy * (planet.gravity * 400 / (d2 + 100)) * dt
+      this.vx += dx * (planet.gravity * GRAV_MULT / (d2 + 100)) * dt
+      this.vy += dy * (planet.gravity * GRAV_MULT / (d2 + 100)) * dt
       if (Math.sqrt(d2) < planet.radius + COMET_RADIUS) {
         this._onFail(); return
       }
